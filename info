@@ -1,0 +1,4 @@
+A simplified, internal protocol for universal language model (ULM) communication.  
+Allows any language model to exchange messages directly with any other language model—no external APIs required.  
+Designed for easy integration, minimal configuration, and basic security (e.g., shared secrets or API keys if needed).  
+Focuses on interoperability and simplicity, without complex authentication or lockout risks.

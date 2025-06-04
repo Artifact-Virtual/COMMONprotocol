@@ -1,0 +1,144 @@
+import asyncio
+from aiohttp import web, ClientSession, ClientConnectorError, ServerTimeoutError
+import json
+import logging
+import os
+from urllib.parse import urlparse
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Server Configuration ---
+# Use environment variables for host, port, and API key
+# IMPORTANT: Change this secret in a real deployment!
+API_KEY_SECRET = os.getenv("RELAY_API_KEY", "your_strong_secret_api_key_123")
+RELAY_HOST = os.getenv("RELAY_HOST", "0.0.0.0")
+RELAY_PORT = int(os.getenv("RELAY_PORT", 8080))
+
+if API_KEY_SECRET == "your_strong_secret_api_key_123":
+    logging.warning("WARNING: Using default API_KEY_SECRET. PLEASE CHANGE THIS IN PRODUCTION!")
+
+async def handle_llm_relay(request):
+    """
+    Handles incoming requests to relay LLM prompts to target LLMs.
+    Expected JSON payload:
+    {
+        "target_llm_url": "http://<target_llm_ip>:<port>/api/generate",
+        "llm_prompt": "What is the capital of France?",
+        "sender_id": "my_llm_instance_1"
+    }
+    """
+    logging.info(f"Received request from {request.remote}")
+
+    # 1. API Key Authentication
+    auth_header = request.headers.get('X-API-Key')
+    if not auth_header or auth_header != API_KEY_SECRET:
+        logging.warning(f"Unauthorized access attempt from {request.remote}. Invalid or missing X-API-Key.")
+        return web.json_response({"error": "Unauthorized: Invalid or missing API Key"}, status=401)
+
+    try:
+        data = await request.json()
+        target_llm_url = data.get("target_llm_url")
+        llm_prompt = data.get("llm_prompt")
+        sender_id = data.get("sender_id", "unknown_sender") # Optional sender ID
+        llm_model = data.get("llm_model", "llama3") # Default LLM model if not specified
+
+        if not target_llm_url or not llm_prompt:
+            logging.warning(f"Bad request from {sender_id}: Missing target_llm_url or llm_prompt.")
+            return web.json_response({"error": "Missing 'target_llm_url' or 'llm_prompt' in request body"}, status=400)
+
+        # 2. Basic URL Validation (CRUCIAL FOR SECURITY - SSRF PREVENTION)
+        # In a real application, you would use a strict whitelist of allowed domains/IPs
+        # or a more sophisticated internal service discovery mechanism.
+        parsed_url = urlparse(target_llm_url)
+        if not parsed_url.scheme in ['http', 'https'] or not parsed_url.netloc:
+            logging.warning(f"Invalid target_llm_url provided by {sender_id}: {target_llm_url}")
+            return web.json_response({"error": "Invalid 'target_llm_url' format"}, status=400)
+
+        # Example: Restrict to specific internal IPs/domains if necessary
+        # if not parsed_url.hostname.startswith("192.168.") and not parsed_url.hostname == "my-internal-llm.local":
+        #     logging.warning(f"Attempt to reach unauthorized internal host: {parsed_url.hostname}")
+        #     return web.json_response({"error": "Target LLM URL not permitted"}, status=403)
+
+
+        logging.info(f"Relaying prompt from '{sender_id}' to '{target_llm_url}' for model '{llm_model}'. Prompt: '{llm_prompt[:50]}...'")
+
+        # 3. Forward the request to the target LLM
+        async with ClientSession() as session:
+            try:
+                # Assuming the target LLM uses a similar API to Ollama's /api/generate
+                llm_payload = {
+                    "model": llm_model,
+                    "prompt": llm_prompt,
+                    "stream": False # We want the full response
+                }
+                async with session.post(target_llm_url, json=llm_payload, timeout=300) as response: # 5 minute timeout
+                    response_json = await response.json()
+                    if response.status == 200:
+                        llm_response_text = response_json.get("response", "").strip()
+                        logging.info(f"Successfully relayed and received response for '{sender_id}'. Response: '{llm_response_text[:50]}...'")
+                        return web.json_response({
+                            "status": "success",
+                            "original_sender_id": sender_id,
+                            "llm_response": llm_response_text,
+                            "llm_raw_response": response_json # Include raw response for debugging/flexibility
+                        })
+                    else:
+                        logging.error(f"Target LLM at {target_llm_url} returned error {response.status}: {response_json}")
+                        return web.json_response({
+                            "error": f"Target LLM error: {response.status} - {response_json.get('error', 'Unknown LLM error')}",
+                            "details": response_json
+                        }, status=502) # Bad Gateway
+
+            except ClientConnectorError as e:
+                logging.error(f"Failed to connect to target LLM at {target_llm_url}: {e}")
+                return web.json_response({"error": f"Failed to connect to target LLM: {e}"}, status=503) # Service Unavailable
+            except ServerTimeoutError:
+                logging.error(f"Timeout connecting to or receiving from target LLM at {target_llm_url}")
+                return web.json_response({"error": "Timeout connecting to target LLM"}, status=504) # Gateway Timeout
+            except json.JSONDecodeError:
+                logging.error(f"Target LLM at {target_llm_url} returned invalid JSON response.")
+                return web.json_response({"error": "Target LLM returned invalid JSON response"}, status=502)
+            except Exception as e:
+                logging.critical(f"Unexpected error during LLM relay process: {e}", exc_info=True)
+                return web.json_response({"error": f"Internal server error during relay: {e}"}, status=500)
+
+    except json.JSONDecodeError:
+        logging.warning(f"Invalid JSON received from {request.remote}.")
+        return web.json_response({"error": "Invalid JSON format"}, status=400)
+    except Exception as e:
+        logging.critical(f"Unexpected error processing initial request from {request.remote}: {e}", exc_info=True)
+        return web.json_response({"error": f"Internal server error: {e}"}, status=500)
+
+async def main():
+    """
+    Main function to set up and run the aiohttp web server.
+    """
+    app = web.Application()
+    app.router.add_post('/relay_llm_message', handle_llm_relay)
+
+    logging.info(f"Starting LLM Relay Server on http://{RELAY_HOST}:{RELAY_PORT}")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, RELAY_HOST, RELAY_PORT)
+    await site.start()
+
+    # Keep the server running indefinitely
+    logging.info("LLM Relay Server started. Press Ctrl+C to exit.")
+    try:
+        while True:
+            await asyncio.sleep(3600) # Sleep for an hour, or until interrupted
+    except asyncio.CancelledError:
+        pass
+    finally:
+        logging.info("Shutting down LLM Relay Server...")
+        await runner.cleanup()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("LLM Relay Server stopped by user.")
+    except Exception as e:
+        logging.critical(f"An unhandled error occurred: {e}", exc_info=True)
+
