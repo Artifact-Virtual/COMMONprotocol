@@ -1,4 +1,4 @@
-# The COMMON Protocol
+# COMMON Protocol
 
 > Communication Context Protocl
 
