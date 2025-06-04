@@ -1,4 +1,6 @@
-# Simplified Context Protocol (SCP)
+# The COMMON Protocol
+
+> Communication Context Protocl
 
 A lightweight, universal protocol for direct communication between language models (ULMs), agents, and clients—without reliance on external APIs or complex infrastructure.
 
