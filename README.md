@@ -6,7 +6,7 @@ A lightweight, universal protocol for direct communication between language mode
 
 ## Overview
 
-**Simplified Context Protocol (SCP)** enables any language model (LLM/ULM), agent, or client to exchange messages directly and securely. It is designed for easy integration, minimal configuration, and basic security, focusing on interoperability and simplicity. SCP is ideal for research, prototyping, and production environments where fast, flexible, and secure LLM-to-LLM or agent communication is required.
+**Common/Simplified Context Protocol** enables any language model (LLM/ULM), agent, or client to exchange messages directly and securely. It is designed for easy integration, minimal configuration, and basic security, focusing on interoperability and simplicity. SCP is ideal for research, prototyping, and production environments where fast, flexible, and secure LLM-to-LLM or agent communication is required.
 
 ## Key Features
 
